@@ -190,43 +190,4 @@ if "datos_ficha" in st.session_state:
     datos = st.session_state["datos_ficha"]
 
     # Generación de la plantilla con docxtpl
-    def generar_word_docxtpl(datos_json):
-        base_dir = os.path.dirname(os.path.abspath(__file__))
-        template_path = os.path.join(base_dir, "Plantilla_Ficha_Bibliografica.docx")
-
-        if not os.path.exists(template_path):
-            template_path = os.path.join(base_dir, "Anexo Ficha revisión bibliográfica.docx")
-
-        doc = DocxTemplate(template_path)
-
-        alcance = datos_json.get("alcance_geografico", {})
-        antecedentes = datos_json.get("tipo_antecedente", {})
-        ambito = datos_json.get("ambito_geografico", {})
-
-        contexto = {
-            'TIPO_INFORMACION': datos_json.get("tipo_informacion", ""),
-            'TITULO': datos_json.get("titulo", ""),
-            'ANIO': datos_json.get("anio", ""),
-            'ELABORADO_POR': datos_json.get("elaborado_por", ""),
-            'AUTORES': datos_json.get("autores", ""),
-            'LINK_DESCARGA': datos_json.get("link_descarga", ""),
-
-            # Marcas de Alcance Geográfico
-            'MARCA_NACIONAL': "X" if alcance.get("Nacional") else "",
-            'MARCA_INTERREGIONAL': "X" if alcance.get("Inter-Regional") else "",
-            'MARCA_REGIONAL': "X" if alcance.get("Regional") else "",
-            'MARCA_CUENCA': "X" if alcance.get("Cuenca(s)") else "",
-
-            # Ámbito Geográfico
-            'REGION': ambito.get("region", ""),
-            'PROVINCIA': ambito.get("provincia", ""),
-            'CUENCA': ambito.get("cuenca", ""),
-
-            # Marcas de Tipo de Antecedente
-            'M_DELIMITACION': "X" if antecedentes.get("Delimitación para la planificación estratégica") else "",
-            'M_GENERO': "X" if antecedentes.get("Enfoque de Género") else "",
-            'M_SOCIOECONOMICA': "X" if antecedentes.get("Caracterización socio-económica y cultural") else "",
-            'M_FISICA': "X" if antecedentes.get("Caracterización física") else "",
-            'M_INFRAESTRUCTURA': "X" if antecedentes.get("Caracterización infraestructura hídrica, redes hidrométricas y de monitoreo") else "",
-            'M_GESTION': "X" if antecedentes.get("Descripción de la gestión hídrica") else "",
-            'M_BALANCE': "X
+    def generar_word_docxtpl
