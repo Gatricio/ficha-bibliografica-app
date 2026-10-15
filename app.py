@@ -5,24 +5,22 @@ import streamlit as st
 from google import genai
 from google.genai import types
 from google.genai.errors import APIError
+from document_builder import rellenar_plantilla_word
 
-# Configuración de página
 st.set_page_config(page_title="Generador de Fichas Bibliográficas", page_icon="📄", layout="wide")
 
 st.title("📄 Generador Automático de Fichas de Resumen")
-st.write("Carga un documento en formato PDF para procesarlo y extraer la información técnica.")
+st.write("Carga un documento PDF para procesarlo, revisar los campos y descargar la ficha en Word (.docx).")
 
-# Obtener clave de API y lista de modelos desde Secrets
+# Cargar credenciales desde Secrets
 try:
     api_key = st.secrets["gemini"]["api_keys"][0]
-    # Lista de modelos según tu configuración en Secrets (desde gemini-3.6 en adelante)
     modelos_disponibles = st.secrets["gemini"].get("models", ["gemini-3.6-flash", "gemini-3.7-flash", "gemini-3.8-flash"])
 except Exception:
-    st.error("No se encontró la configuración en los Secrets de Streamlit. Por favor, revisa la configuración.")
+    st.error("Revisa la configuración de Secrets en Streamlit Cloud.")
     st.stop()
 
 def extraer_texto_pdf(pdf_file):
-    """Extrae el texto legible de un archivo PDF."""
     reader = pypdf.PdfReader(pdf_file)
     texto = ""
     for page in reader.pages:
@@ -30,10 +28,6 @@ def extraer_texto_pdf(pdf_file):
     return texto
 
 def analizar_pdf_con_ia(texto_pdf, api_key, lista_modelos):
-    """
-    Envía el texto a Gemini intentando con la lista de modelos configurada
-    y realizando reintentos en caso de saturación (503).
-    """
     client = genai.Client(api_key=api_key)
 
     prompt = f"""
@@ -44,7 +38,7 @@ def analizar_pdf_con_ia(texto_pdf, api_key, lista_modelos):
     {texto_pdf[:35000]}
 
     INSTRUCCIONES:
-    Responde ÚNICAMENTE con un objeto JSON válido (sin texto antes ni después) utilizando exactamente esta estructura:
+    Responde ÚNICAMENTE con un objeto JSON válido utilizando exactamente esta estructura:
 
     {{
         "tipo_informacion": "Tipo de documento (ej: Artículo científico, Informe técnico, Ley)",
@@ -81,11 +75,7 @@ def analizar_pdf_con_ia(texto_pdf, api_key, lista_modelos):
     }}
     """
 
-    ultimo_error = None
-
-    # Recorre los modelos configurados en caso de saturación
     for modelo in lista_modelos:
-        # Intenta hasta 2 veces por modelo si hay error 503
         for intento in range(2):
             try:
                 response = client.models.generate_content(
@@ -98,33 +88,50 @@ def analizar_pdf_con_ia(texto_pdf, api_key, lista_modelos):
                 )
                 return json.loads(response.text)
             except APIError as e:
-                ultimo_error = e
                 if e.code == 503:
-                    time.sleep(2) # Espera 2 segundos antes de reintentar
+                    time.sleep(2)
                     continue
                 else:
                     raise e
             except Exception as e:
-                ultimo_error = e
                 break
+    raise Exception("No se pudo obtener respuesta de la API. Intenta nuevamente.")
 
-    raise ultimo_error
-
-# Interfaz de usuario: Carga de archivo
+# Carga de archivo PDF
 uploaded_file = st.file_uploader("Selecciona el archivo PDF a procesar", type=["pdf"])
 
 if uploaded_file is not None:
     if st.button("🔍 Analizar Documento", type="primary"):
-        with st.spinner("Procesando PDF con Inteligencia Artificial..."):
+        with st.spinner("Procesando PDF y estructurando información..."):
             try:
                 texto_extraido = extraer_texto_pdf(uploaded_file)
                 datos_json = analizar_pdf_con_ia(texto_extraido, api_key, modelos_disponibles)
                 st.session_state["datos_ficha"] = datos_json
                 st.success("¡Análisis finalizado con éxito!")
             except Exception as e:
-                st.error(f"El servidor de IA está momentáneamente ocupado. Inténtalo de nuevo en unos segundos. Detalle: {e}")
+                st.error(f"Error durante el procesamiento: {e}")
 
-# Muestra los datos analizados
+# Muestra y descarga de la Ficha en formato Word
 if "datos_ficha" in st.session_state:
-    st.subheader("📋 Datos Extraídos para la Ficha")
-    st.json(st.session_state["datos_ficha"])
+    st.markdown("---")
+    st.subheader("📝 Ficha Generada (Revisión / Descarga)")
+
+    datos = st.session_state["datos_ficha"]
+
+    # Generación del archivo .docx rellenado
+    try:
+        plantilla_path = "Anexo Ficha revisión bibliográfica.docx" # Asegúrate que coincida con el nombre exacto subido a GitHub
+        docx_buffer = rellenar_plantilla_word(plantilla_path, datos)
+
+        st.download_button(
+            label="📥 Descargar Ficha en Word (.docx)",
+            data=docx_buffer,
+            file_name=f"Ficha_Resumen_{datos.get('anio', '2026')}.docx",
+            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            type="primary"
+        )
+    except Exception as e:
+        st.warning(f"Asegúrate de que la plantilla Word esté subida a GitHub con el nombre exacto. Detalle: {e}")
+
+    # Muestra los datos estructurados
+    st.json(datos)
