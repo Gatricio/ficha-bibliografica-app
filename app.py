@@ -229,4 +229,38 @@ if "datos_ficha" in st.session_state:
 
             # Marcas de Tipo de Antecedente
             'M_DELIMITACION': "X" if antecedentes.get("Delimitación para la planificación estratégica") else "",
-            'M_GENERO': "
+            'M_GENERO': "X" if antecedentes.get("Enfoque de Género") else "",
+            'M_SOCIOECONOMICA': "X" if antecedentes.get("Caracterización socio-económica y cultural") else "",
+            'M_FISICA': "X" if antecedentes.get("Caracterización física") else "",
+            'M_INFRAESTRUCTURA': "X" if antecedentes.get("Caracterización infraestructura hídrica, redes hidrométricas y de monitoreo") else "",
+            'M_GESTION': "X" if antecedentes.get("Descripción de la gestión hídrica") else "",
+            'M_BALANCE': "X" if antecedentes.get("Balance Hídrico") else "",
+            'M_CATASTRO': "X" if antecedentes.get("Catastro de iniciativas y medidas") else "",
+
+            # Bloques de Texto y Listas
+            'OBJETIVO_GENERAL': datos_json.get("objetivo_general", ""),
+            'OBJETIVOS_ESPECIFICOS': datos_json.get("objetivos_especificos", []),
+            'METODOLOGIAS': datos_json.get("metodologias", []),
+            'RESULTADOS': datos_json.get("resultados", [])
+        }
+
+        doc.render(contexto)
+        buffer = BytesIO()
+        doc.save(buffer)
+        buffer.seek(0)
+        return buffer
+
+    # Definir nombre dinámico del archivo
+    nombre_salida = limpiar_nombre_archivo(datos.get("titulo", ""))
+
+    # Botón de Descarga
+    st.download_button(
+        label=f"📥 Descargar Ficha: {nombre_salida}",
+        data=generar_word_docxtpl(datos),
+        file_name=nombre_salida,
+        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        use_container_width=True
+    )
+
+    # Vista previa JSON
+    st.json(datos)
