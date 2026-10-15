@@ -1,52 +1,91 @@
-import json
+import os
 import time
-import pypdf
+import json
+import re
+from io import BytesIO
 import streamlit as st
+import pypdf
+from docxtpl import DocxTemplate
 from google import genai
 from google.genai import types
-from google.genai.errors import APIError
-from document_builder import rellenar_plantilla_word
 
-st.set_page_config(page_title="Generador de Fichas Bibliográficas", page_icon="📄", layout="wide")
+# Configuración de página
+st.set_page_config(
+    page_title="Generador de Fichas Bibliográficas",
+    page_icon="📄",
+    layout="wide"
+)
 
-st.title("📄 Generador Automático de Fichas de Resumen")
-st.write("Carga un documento PDF para procesarlo, revisar los campos y descargar la ficha en Word (.docx).")
+# Estilos corporativos
+st.markdown("""
+    <style>
+    .main-header { font-size:24px; font-weight:bold; color:#002855; margin-bottom:2px; }
+    .sub-header { font-size:14px; color:#555; margin-bottom: 20px; }
+    .stButton>button { background-color: #0056B3; color: white; font-weight: bold; width: 100%; }
+    </style>
+""", unsafe_allow_html=True)
 
-# Cargar credenciales desde Secrets
-try:
-    api_key = st.secrets["gemini"]["api_keys"][0]
-    modelos_disponibles = st.secrets["gemini"].get("models", ["gemini-3.6-flash", "gemini-3.7-flash", "gemini-3.8-flash"])
-except Exception:
-    st.error("Revisa la configuración de Secrets en Streamlit Cloud.")
-    st.stop()
+# ---------------------------------------------------------
+# OBTENCIÓN DE API KEYS Y MODELOS DESDE SECRETS
+# ---------------------------------------------------------
+def obtener_configuracion_gemini():
+    keys = []
+    models = ["gemini-3.6-flash", "gemini-3.7-flash", "gemini-3.8-flash"]
 
-def extraer_texto_pdf(pdf_file):
-    reader = pypdf.PdfReader(pdf_file)
-    texto = ""
-    for page in reader.pages:
-        texto += page.extract_text() or ""
-    return texto
+    if "gemini" in st.secrets:
+        gemini_sec = st.secrets["gemini"]
+        if "api_keys" in gemini_sec and isinstance(gemini_sec["api_keys"], list):
+            keys = [k.strip() for k in gemini_sec["api_keys"] if k.strip()]
+        if "models" in gemini_sec and isinstance(gemini_sec["models"], list):
+            models = [m.strip() for m in gemini_sec["models"] if m.strip()]
 
-def analizar_pdf_con_ia(texto_pdf, api_key, lista_modelos):
-    client = genai.Client(api_key=api_key)
+    if not keys:
+        single_key = st.secrets.get("GEMINI_API_KEY", os.environ.get("GEMINI_API_KEY", ""))
+        if single_key:
+            keys = [single_key.strip()]
+
+    return keys, models
+
+api_keys, modelos_disponibles = obtener_configuracion_gemini()
+
+# ---------------------------------------------------------
+# EXTRACCIÓN DE TEXTO PDF
+# ---------------------------------------------------------
+def extraer_texto_pdf(file_bytes):
+    try:
+        pdf_reader = pypdf.PdfReader(BytesIO(file_bytes))
+        texto = ""
+        for page in pdf_reader.pages:
+            texto += page.extract_text() or ""
+        return texto
+    except Exception as e:
+        return f"[Error al leer PDF: {str(e)}]"
+
+# ---------------------------------------------------------
+# PROCESAMIENTO DE CONTEXTO CON GEMINI
+# ---------------------------------------------------------
+def analizar_documento_con_gemini(texto_pdf):
+    if not api_keys:
+        st.error("No se encontraron API Keys en los Secrets.")
+        return None
 
     prompt = f"""
-    Eres un experto analista en revisión bibliográfica e ingeniería hídrica/ambiental.
-    Analiza el siguiente texto de un estudio/artículo/informe y completa la información requerida para una ficha estandarizada de resumen.
+    Eres un experto analista en revisión bibliográfica e ingeniería hídrica.
+    Analiza el siguiente texto de un documento técnico/científico y extrae la información requerida para una ficha de resumen estandarizada.
 
     TEXTO DEL DOCUMENTO:
     {texto_pdf[:35000]}
 
     INSTRUCCIONES:
-    Responde ÚNICAMENTE con un objeto JSON válido utilizando exactamente esta estructura:
+    Responde ÚNICAMENTE con un objeto JSON válido (sin marcas markdown de código ```json) con la siguiente estructura exacta:
 
     {{
-        "tipo_informacion": "Tipo de documento (ej: Artículo científico, Informe técnico, Ley)",
-        "titulo": "Título completo del documento",
+        "tipo_informacion": "Tipo de documento (ej: Artículo científico, Informe técnico)",
+        "titulo": "Título exacto del documento",
         "anio": "Año de publicación",
-        "elaborado_por": "Institución, laboratorio o entidad responsable",
+        "elaborado_por": "Institución o departamento que elaboró el estudio",
         "autores": "Autores del documento separados por punto y coma",
-        "link_descarga": "URL o DOI si figura en el documento",
+        "link_descarga": "URL o DOI si aplica",
         "alcance_geografico": {{
             "Nacional": false,
             "Inter-Regional": false,
@@ -54,9 +93,9 @@ def analizar_pdf_con_ia(texto_pdf, api_key, lista_modelos):
             "Cuenca(s)": false
         }},
         "ambito_geografico": {{
-            "region": "Región o zona geográfica descrita",
+            "region": "Región o zona geográfica",
             "provincia": "Provincia",
-            "cuenca": "Cuenca o área específica de estudio"
+            "cuenca": "Cuenca hídrica específica"
         }},
         "tipo_antecedente": {{
             "Delimitación para la planificación estratégica": false,
@@ -68,70 +107,130 @@ def analizar_pdf_con_ia(texto_pdf, api_key, lista_modelos):
             "Balance Hídrico": false,
             "Catastro de iniciativas y medidas": false
         }},
-        "objetivo_general": "Objetivo general del estudio",
+        "objetivo_general": "Objetivo general",
         "objetivos_especificos": ["Objetivo específico 1", "Objetivo específico 2"],
-        "metodologias": ["Punto clave metodológico 1", "Punto clave metodológico 2"],
+        "metodologias": ["Punto metodológico 1", "Punto metodológico 2"],
         "resultados": ["Resultado principal 1", "Resultado principal 2"]
     }}
     """
 
-    for modelo in lista_modelos:
-        for intento in range(2):
-            try:
-                response = client.models.generate_content(
-                    model=modelo,
-                    contents=prompt,
-                    config=types.GenerateContentConfig(
-                        response_mime_type="application/json",
-                        temperature=0.1,
-                    ),
-                )
-                return json.loads(response.text)
-            except APIError as e:
-                if e.code == 503:
-                    time.sleep(2)
-                    continue
-                else:
-                    raise e
-            except Exception as e:
-                break
-    raise Exception("No se pudo obtener respuesta de la API. Intenta nuevamente.")
+    for key in api_keys:
+        client = genai.Client(api_key=key)
+        for modelo in modelos_disponibles:
+            intentos = 0
+            while intentos < 3:
+                try:
+                    response = client.models.generate_content(
+                        model=modelo,
+                        contents=prompt,
+                        config=types.GenerateContentConfig(
+                            response_mime_type="application/json",
+                            temperature=0.1,
+                        )
+                    )
+                    if response and response.text:
+                        return json.loads(response.text)
+                except Exception as e:
+                    err_msg = str(e)
+                    if "503" in err_msg or "UNAVAILABLE" in err_msg:
+                        intentos += 1
+                        time.sleep(2 * intentos)
+                        continue
+                    break
+    return None
 
-# Carga de archivo PDF
-uploaded_file = st.file_uploader("Selecciona el archivo PDF a procesar", type=["pdf"])
+# ---------------------------------------------------------
+# INTERFAZ PRINCIPAL
+# ---------------------------------------------------------
+st.markdown('<div class="main-header">PLATAFORMA DE REVISIÓN BIBLIOGRÁFICA Y FICHAS DE RESUMEN</div>', unsafe_allow_html=True)
+st.markdown('<div class="sub-header">Procesamiento automático de documentos y generación de fichas en Word</div>', unsafe_allow_html=True)
 
-if uploaded_file is not None:
-    if st.button("🔍 Analizar Documento", type="primary"):
-        with st.spinner("Procesando PDF y estructurando información..."):
-            try:
-                texto_extraido = extraer_texto_pdf(uploaded_file)
-                datos_json = analizar_pdf_con_ia(texto_extraido, api_key, modelos_disponibles)
-                st.session_state["datos_ficha"] = datos_json
-                st.success("¡Análisis finalizado con éxito!")
-            except Exception as e:
-                st.error(f"Error durante el procesamiento: {e}")
+uploaded_file = st.file_uploader("Cargar documento PDF bibliográfico:", type=["pdf"])
 
-# Muestra y descarga de la Ficha en formato Word
+if uploaded_file:
+    file_bytes = uploaded_file.read()
+    if st.button("🔍 Procesar y Extraer Información", type="primary"):
+        with st.spinner("Leyendo documento y ejecutando análisis con Gemini IA..."):
+            texto = extraer_texto_pdf(file_bytes)
+            datos_extraidos = analizar_documento_con_gemini(texto)
+            
+            if datos_extraidos:
+                st.session_state["datos_ficha"] = datos_extraidos
+                st.success("¡Análisis completado exitosamente!")
+            else:
+                st.error("No se pudo extraer la información del documento.")
+
 if "datos_ficha" in st.session_state:
     st.markdown("---")
-    st.subheader("📝 Ficha Generada (Revisión / Descarga)")
+    st.subheader("📋 Vista Previa / Edición de Datos Extraídos")
 
     datos = st.session_state["datos_ficha"]
 
-    # Generación del archivo .docx rellenado
-    try:
-        plantilla_path = "Anexo Ficha revisión bibliográfica.docx" # Asegúrate que coincida con el nombre exacto subido a GitHub
-        docx_buffer = rellenar_plantilla_word(plantilla_path, datos)
+    # Generación de la plantilla con docxtpl
+    def generar_word_docxtpl(datos_json):
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        template_path = os.path.join(base_dir, "Plantilla_Ficha_Bibliografica.docx")
 
-        st.download_button(
-            label="📥 Descargar Ficha en Word (.docx)",
-            data=docx_buffer,
-            file_name=f"Ficha_Resumen_{datos.get('anio', '2026')}.docx",
-            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            type="primary"
-        )
-    except Exception as e:
-        st.warning(f"Asegúrate de que la plantilla Word esté subida a GitHub con el nombre exacto. Detalle: {e}")
+        if not os.path.exists(template_path):
+            # Intenta buscar el archivo subido alternativo
+            template_path = os.path.join(base_dir, "Anexo Ficha revisión bibliográfica.docx")
 
-    # Muestra los datos estructurados
+        doc = DocxTemplate(template_path)
+
+        alcance = datos_json.get("alcance_geografico", {})
+        antecedentes = datos_json.get("tipo_antecedente", {})
+        ambito = datos_json.get("ambito_geografico", {})
+
+        contexto = {
+            'TIPO_INFORMACION': datos_json.get("tipo_informacion", ""),
+            'TITULO': datos_json.get("titulo", ""),
+            'ANIO': datos_json.get("anio", ""),
+            'ELABORADO_POR': datos_json.get("elaborado_por", ""),
+            'AUTORES': datos_json.get("autores", ""),
+            'LINK_DESCARGA': datos_json.get("link_descarga", ""),
+
+            # Marcas de Alcance Geográfico
+            'MARCA_NACIONAL': "X" if alcance.get("Nacional") else "",
+            'MARCA_INTERREGIONAL': "X" if alcance.get("Inter-Regional") else "",
+            'MARCA_REGIONAL': "X" if alcance.get("Regional") else "",
+            'MARCA_CUENCA': "X" if alcance.get("Cuenca(s)") else "",
+
+            # Ámbito
+            'REGION': ambito.get("region", ""),
+            'PROVINCIA': ambito.get("provincia", ""),
+            'CUENCA': ambito.get("cuenca", ""),
+
+            # Marcas de Antecedentes
+            'M_DELIMITACION': "X" if antecedentes.get("Delimitación para la planificación estratégica") else "",
+            'M_GENERO': "X" if antecedentes.get("Enfoque de Género") else "",
+            'M_SOCIOECONOMICA': "X" if antecedentes.get("Caracterización socio-económica y cultural") else "",
+            'M_FISICA': "X" if antecedentes.get("Caracterización física") else "",
+            'M_INFRAESTRUCTURA': "X" if antecedentes.get("Caracterización infraestructura hídrica, redes hidrométricas y de monitoreo") else "",
+            'M_GESTION': "X" if antecedentes.get("Descripción de la gestión hídrica") else "",
+            'M_BALANCE': "X" if antecedentes.get("Balance Hídrico") else "",
+            'M_CATASTRO': "X" if antecedentes.get("Catastro de iniciativas y medidas") else "",
+
+            # Bloques de Texto y Listas
+            'OBJETIVO_GENERAL': datos_json.get("objetivo_general", ""),
+            'OBJETIVOS_ESPECIFICOS': datos_json.get("objetivos_especificos", []),
+            'METODOLOGIAS': datos_json.get("metodologias", []),
+            'RESULTADOS': datos_json.get("resultados", [])
+        }
+
+        doc.render(contexto)
+        buffer = BytesIO()
+        doc.save(buffer)
+        buffer.seek(0)
+        return buffer
+
+    # Botón de Descarga
+    st.download_button(
+        label="📥 Descargar Ficha Rellenada (.docx)",
+        data=generar_word_docxtpl(datos),
+        file_name=f"Ficha_{datos.get('anio', 'Resumen')}.docx",
+        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        use_container_width=True
+    )
+
+    # Vista previa JSON editable
     st.json(datos)
