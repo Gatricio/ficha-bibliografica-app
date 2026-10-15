@@ -65,21 +65,15 @@ def limpiar_nombre_archivo(titulo):
 # ---------------------------------------------------------
 @st.cache_data(show_spinner=False)
 def extraer_texto_optimizado(file_bytes):
-    """
-    Extrae únicamente las secciones clave (primeras páginas y resumen)
-    para acelerar drásticamente el procesamiento por la IA.
-    """
     try:
         pdf_reader = pypdf.PdfReader(BytesIO(file_bytes))
         num_paginas = len(pdf_reader.pages)
         
         texto_inicio = ""
-        # Leer máximo las primeras 4 páginas (donde están título, autores, abstract, objetivos y metodología)
         paginas_a_leer = min(4, num_paginas)
         for i in range(paginas_a_leer):
             texto_inicio += pdf_reader.pages[i].extract_text() or ""
             
-        # Si el documento es largo, agregar la última página (conclusiones/resultados)
         texto_final = ""
         if num_paginas > 4:
             texto_final = pdf_reader.pages[-1].extract_text() or ""
@@ -90,32 +84,31 @@ def extraer_texto_optimizado(file_bytes):
         return f"[Error al leer PDF: {str(e)}]"
 
 # ---------------------------------------------------------
-# PROCESAMIENTO ULTRARRÁPIDO CON GEMINI IA
+# PROCESAMIENTO RÁPIDO CON GEMINI IA
 # ---------------------------------------------------------
-@st.cache_data(show_spinner=False)
 def analizar_documento_rapido(texto_pdf):
     if not api_keys:
-        return None
+        return None, "No se encontraron API Keys configuradas en st.secrets."
 
     prompt = f"""
-    Eres un experto analista bibliográfico hídrico. Extrae rápidamente la información requerida del siguiente documento.
+    Eres un experto analista en revisión bibliográfica e ingeniería hídrica/ambiental. Extrae rápidamente la información requerida del siguiente documento.
 
     TEXTO DEL DOCUMENTO:
     {texto_pdf}
 
     INSTRUCCIONES DE REDACCIÓN Y ESTRUCTURA:
-    1. OBJETIVO GENERAL: Redacta un texto breve y continuo con el propósito central.
-    2. OBJETIVOS ESPECÍFICOS: Extrae OBLIGATORIAMENTE ENTRE 3 Y 6 OBJETIVOS ESPECÍFICOS breves iniciando con verbo en infinitivo.
+    1. OBJETIVO GENERAL: Redacta un texto breve y continuo con el propósito central del estudio.
+    2. OBJETIVOS ESPECÍFICOS: Extrae y redacta OBLIGATORIAMENTE ENTRE 3 Y 6 OBJETIVOS ESPECÍFICOS breves iniciando con un verbo en infinitivo.
     3. METODOLOGÍAS Y RESULTADOS: Redacta puntos sintéticos.
 
-    Responde ÚNICAMENTE con un objeto JSON válido (sin código markdown) con esta estructura exacta:
+    Responde ÚNICAMENTE con un objeto JSON válido (sin marcas markdown de código ```json) con la siguiente estructura exacta:
 
     {{
-        "tipo_informacion": "Tipo de documento (ej: Artículo científico, Informe técnico)",
-        "titulo": "Título exacto",
+        "tipo_informacion": "Tipo de documento (ej: Artículo científico, Informe técnico, Ley)",
+        "titulo": "Título exacto del documento",
         "anio": "Año de publicación",
-        "elaborado_por": "Institución o departamento",
-        "autores": "Autores separados por punto y coma",
+        "elaborado_por": "Institución o laboratorio que elaboró el estudio",
+        "autores": "Autores del documento separados por punto y coma",
         "link_descarga": "URL o DOI si aplica",
         "alcance_geografico": {{
             "Nacional": false,
@@ -139,51 +132,61 @@ def analizar_documento_rapido(texto_pdf):
             "Catastro de iniciativas y medidas": false
         }},
         "objetivo_general": "Evaluación/Análisis de...",
-        "objetivos_especificos": ["Cuantificar...", "Evaluar...", "Proponer..."],
-        "metodologias": ["Punto 1", "Punto 2"],
-        "resultados": ["Resultado 1", "Resultado 2"]
+        "objetivos_especificos": ["Cuantificar los efectos...", "Evaluar los escenarios...", "Proponer opciones..."],
+        "metodologias": ["Punto metodológico 1", "Punto metodológico 2"],
+        "resultados": ["Resultado principal 1", "Resultado principal 2"]
     }}
     """
+
+    ultimo_error = ""
 
     for key in api_keys:
         client = genai.Client(api_key=key)
         for modelo in modelos_disponibles:
-            try:
-                response = client.models.generate_content(
-                    model=modelo,
-                    contents=prompt,
-                    config=types.GenerateContentConfig(
-                        response_mime_type="application/json",
-                        temperature=0.0,  # Respuesta directa sin vacilaciones
-                        max_output_tokens=1500,  # Limite para acelerar la generación
+            intentos = 0
+            while intentos < 2:
+                try:
+                    response = client.models.generate_content(
+                        model=modelo,
+                        contents=prompt,
+                        config=types.GenerateContentConfig(
+                            response_mime_type="application/json",
+                            temperature=0.1,
+                        )
                     )
-                )
-                if response and response.text:
-                    return json.loads(response.text)
-            except Exception:
-                continue
-    return None
+                    if response and response.text:
+                        return json.loads(response.text), None
+                except Exception as e:
+                    err_msg = str(e)
+                    ultimo_error = f"Modelo: {modelo} | Error: {err_msg}"
+                    if "503" in err_msg or "UNAVAILABLE" in err_msg:
+                        intentos += 1
+                        time.sleep(2)
+                        continue
+                    break
+
+    return None, ultimo_error
 
 # ---------------------------------------------------------
 # INTERFAZ DE USUARIO STREAMLIT
 # ---------------------------------------------------------
 st.markdown('<div class="main-header">PLATAFORMA DE REVISIÓN BIBLIOGRÁFICA Y FICHAS DE RESUMEN</div>', unsafe_allow_html=True)
-st.markdown('<div class="sub-header">Procesamiento ultra-rápido de documentos y generación de fichas en Word</div>', unsafe_allow_html=True)
+st.markdown('<div class="sub-header">Procesamiento automático de documentos y generación de fichas en Word</div>', unsafe_allow_html=True)
 
 uploaded_file = st.file_uploader("Cargar documento PDF bibliográfico:", type=["pdf"])
 
 if uploaded_file:
     file_bytes = uploaded_file.read()
-    if st.button("⚡ Procesar al Instante", type="primary"):
-        with st.spinner("Procesando documento en segundos..."):
+    if st.button("⚡ Procesar e Intentar Generación", type="primary"):
+        with st.spinner("Procesando documento..."):
             texto = extraer_texto_optimizado(file_bytes)
-            datos_extraidos = analizar_documento_rapido(texto)
+            datos_extraidos, err_msg = analizar_documento_rapido(texto)
 
             if datos_extraidos:
                 st.session_state["datos_ficha"] = datos_extraidos
                 st.success("¡Ficha generada exitosamente!")
             else:
-                st.error("Ocurrió un error. Revisa la configuración de API.")
+                st.error(f"Error al conectar con la API de Gemini: {err_msg}")
 
 if "datos_ficha" in st.session_state:
     st.markdown("---")
@@ -226,38 +229,4 @@ if "datos_ficha" in st.session_state:
 
             # Marcas de Tipo de Antecedente
             'M_DELIMITACION': "X" if antecedentes.get("Delimitación para la planificación estratégica") else "",
-            'M_GENERO': "X" if antecedentes.get("Enfoque de Género") else "",
-            'M_SOCIOECONOMICA': "X" if antecedentes.get("Caracterización socio-económica y cultural") else "",
-            'M_FISICA': "X" if antecedentes.get("Caracterización física") else "",
-            'M_INFRAESTRUCTURA': "X" if antecedentes.get("Caracterización infraestructura hídrica, redes hidrométricas y de monitoreo") else "",
-            'M_GESTION': "X" if antecedentes.get("Descripción de la gestión hídrica") else "",
-            'M_BALANCE': "X" if antecedentes.get("Balance Hídrico") else "",
-            'M_CATASTRO': "X" if antecedentes.get("Catastro de iniciativas y medidas") else "",
-
-            # Bloques de Texto y Listas
-            'OBJETIVO_GENERAL': datos_json.get("objetivo_general", ""),
-            'OBJETIVOS_ESPECIFICOS': datos_json.get("objetivos_especificos", []),
-            'METODOLOGIAS': datos_json.get("metodologias", []),
-            'RESULTADOS': datos_json.get("resultados", [])
-        }
-
-        doc.render(contexto)
-        buffer = BytesIO()
-        doc.save(buffer)
-        buffer.seek(0)
-        return buffer
-
-    # Definir nombre dinámico del archivo
-    nombre_salida = limpiar_nombre_archivo(datos.get("titulo", ""))
-
-    # Botón de Descarga
-    st.download_button(
-        label=f"📥 Descargar Ficha: {nombre_salida}",
-        data=generar_word_docxtpl(datos),
-        file_name=nombre_salida,
-        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        use_container_width=True
-    )
-
-    # Vista previa JSON
-    st.json(datos)
+            'M_GENERO': "
