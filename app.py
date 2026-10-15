@@ -49,6 +49,21 @@ def obtener_configuracion_gemini():
 api_keys, modelos_disponibles = obtener_configuracion_gemini()
 
 # ---------------------------------------------------------
+# FUNCIÓN PARA LIMPIAR EL NOMBRE DEL ARCHIVO DE DESCARGA
+# ---------------------------------------------------------
+def limpiar_nombre_archivo(titulo):
+    if not titulo:
+        return "Ficha_Resumen.docx"
+    # Eliminar caracteres no válidos para nombres de archivos en OS
+    nombre_limpio = re.sub(r'[\\/*?:"<>|]', '', titulo)
+    # Reemplazar espacios múltiples y saltos de línea
+    nombre_limpio = re.sub(r'\s+', '_', nombre_limpio.strip())
+    # Limitar la longitud máxima del nombre del archivo
+    if len(nombre_limpio) > 100:
+        nombre_limpio = nombre_limpio[:100]
+    return f"Ficha_{nombre_limpio}.docx"
+
+# ---------------------------------------------------------
 # EXTRACCIÓN DE TEXTO DESDE EL PDF
 # ---------------------------------------------------------
 def extraer_texto_pdf(file_bytes):
@@ -214,30 +229,4 @@ if "datos_ficha" in st.session_state:
             'M_FISICA': "X" if antecedentes.get("Caracterización física") else "",
             'M_INFRAESTRUCTURA': "X" if antecedentes.get("Caracterización infraestructura hídrica, redes hidrométricas y de monitoreo") else "",
             'M_GESTION': "X" if antecedentes.get("Descripción de la gestión hídrica") else "",
-            'M_BALANCE': "X" if antecedentes.get("Balance Hídrico") else "",
-            'M_CATASTRO': "X" if antecedentes.get("Catastro de iniciativas y medidas") else "",
-
-            # Bloques de Texto y Listas
-            'OBJETIVO_GENERAL': datos_json.get("objetivo_general", ""),
-            'OBJETIVOS_ESPECIFICOS': datos_json.get("objetivos_especificos", []),
-            'METODOLOGIAS': datos_json.get("metodologias", []),
-            'RESULTADOS': datos_json.get("resultados", [])
-        }
-
-        doc.render(contexto)
-        buffer = BytesIO()
-        doc.save(buffer)
-        buffer.seek(0)
-        return buffer
-
-    # Botón de Descarga
-    st.download_button(
-        label="📥 Descargar Ficha Rellenada (.docx)",
-        data=generar_word_docxtpl(datos),
-        file_name=f"Ficha_{datos.get('anio', 'Resumen')}.docx",
-        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        use_container_width=True
-    )
-
-    # Vista previa JSON editable
-    st.json(datos)
+            'M_BALANCE': "X
