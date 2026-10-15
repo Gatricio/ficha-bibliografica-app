@@ -16,7 +16,7 @@ st.set_page_config(
     layout="wide"
 )
 
-# Estilos visuales
+# Estilos visuales corporativos
 st.markdown("""
     <style>
     .main-header { font-size:24px; font-weight:bold; color:#002855; margin-bottom:2px; }
@@ -54,56 +54,68 @@ api_keys, modelos_disponibles = obtener_configuracion_gemini()
 def limpiar_nombre_archivo(titulo):
     if not titulo:
         return "Ficha_Resumen.docx"
-    # Eliminar caracteres no válidos para nombres de archivos en OS
     nombre_limpio = re.sub(r'[\\/*?:"<>|]', '', titulo)
-    # Reemplazar espacios múltiples y saltos de línea
     nombre_limpio = re.sub(r'\s+', '_', nombre_limpio.strip())
-    # Limitar la longitud máxima del nombre del archivo
     if len(nombre_limpio) > 100:
         nombre_limpio = nombre_limpio[:100]
     return f"Ficha_{nombre_limpio}.docx"
 
 # ---------------------------------------------------------
-# EXTRACCIÓN DE TEXTO DESDE EL PDF
+# EXTRACCIÓN RÁPIDA DE TEXTO (OPTIMIZADA)
 # ---------------------------------------------------------
-def extraer_texto_pdf(file_bytes):
+@st.cache_data(show_spinner=False)
+def extraer_texto_optimizado(file_bytes):
+    """
+    Extrae únicamente las secciones clave (primeras páginas y resumen)
+    para acelerar drásticamente el procesamiento por la IA.
+    """
     try:
         pdf_reader = pypdf.PdfReader(BytesIO(file_bytes))
-        texto = ""
-        for page in pdf_reader.pages:
-            texto += page.extract_text() or ""
-        return texto
+        num_paginas = len(pdf_reader.pages)
+        
+        texto_inicio = ""
+        # Leer máximo las primeras 4 páginas (donde están título, autores, abstract, objetivos y metodología)
+        paginas_a_leer = min(4, num_paginas)
+        for i in range(paginas_a_leer):
+            texto_inicio += pdf_reader.pages[i].extract_text() or ""
+            
+        # Si el documento es largo, agregar la última página (conclusiones/resultados)
+        texto_final = ""
+        if num_paginas > 4:
+            texto_final = pdf_reader.pages[-1].extract_text() or ""
+
+        texto_acotado = (texto_inicio + "\n\n...[SECCIÓN INTERMEDIA OMITIDA POR VELOCIDAD]...\n\n" + texto_final)[:12000]
+        return texto_acotado
     except Exception as e:
         return f"[Error al leer PDF: {str(e)}]"
 
 # ---------------------------------------------------------
-# PROCESAMIENTO Y EXTRACCIÓN CON GEMINI IA
+# PROCESAMIENTO ULTRARRÁPIDO CON GEMINI IA
 # ---------------------------------------------------------
-def analizar_documento_con_gemini(texto_pdf):
+@st.cache_data(show_spinner=False)
+def analizar_documento_rapido(texto_pdf):
     if not api_keys:
-        st.error("No se encontraron API Keys configuradas en Secrets.")
         return None
 
     prompt = f"""
-    Eres un experto analista en revisión bibliográfica e ingeniería hídrica/ambiental.
-    Analiza el siguiente texto de un documento técnico/científico y extrae la información requerida para una ficha de resumen estandarizada.
+    Eres un experto analista bibliográfico hídrico. Extrae rápidamente la información requerida del siguiente documento.
 
     TEXTO DEL DOCUMENTO:
-    {texto_pdf[:35000]}
+    {texto_pdf}
 
     INSTRUCCIONES DE REDACCIÓN Y ESTRUCTURA:
-    1. OBJETIVO GENERAL: Redacta un texto breve y continuo que describa el propósito central del estudio.
-    2. OBJETIVOS ESPECÍFICOS: Extrae y redacta OBLIGATORIAMENTE ENTRE 3 Y 6 OBJETIVOS ESPECÍFICOS. Deben ser sintéticos, concisos, iniciar con un verbo en infinitivo y abordar aspectos clave puntuales del estudio.
-    3. METODOLOGÍAS Y RESULTADOS: Redacta puntos sintéticos claros.
+    1. OBJETIVO GENERAL: Redacta un texto breve y continuo con el propósito central.
+    2. OBJETIVOS ESPECÍFICOS: Extrae OBLIGATORIAMENTE ENTRE 3 Y 6 OBJETIVOS ESPECÍFICOS breves iniciando con verbo en infinitivo.
+    3. METODOLOGÍAS Y RESULTADOS: Redacta puntos sintéticos.
 
-    Responde ÚNICAMENTE con un objeto JSON válido (sin marcas markdown de código ```json) con la siguiente estructura exacta:
+    Responde ÚNICAMENTE con un objeto JSON válido (sin código markdown) con esta estructura exacta:
 
     {{
-        "tipo_informacion": "Tipo de documento (ej: Artículo científico, Informe técnico, Ley)",
-        "titulo": "Título exacto del documento",
+        "tipo_informacion": "Tipo de documento (ej: Artículo científico, Informe técnico)",
+        "titulo": "Título exacto",
         "anio": "Año de publicación",
-        "elaborado_por": "Institución o laboratorio que elaboró el estudio",
-        "autores": "Autores del documento separados por punto y coma",
+        "elaborado_por": "Institución o departamento",
+        "autores": "Autores separados por punto y coma",
         "link_descarga": "URL o DOI si aplica",
         "alcance_geografico": {{
             "Nacional": false,
@@ -112,9 +124,9 @@ def analizar_documento_con_gemini(texto_pdf):
             "Cuenca(s)": false
         }},
         "ambito_geografico": {{
-            "region": "Región o zona geográfica",
+            "region": "Región",
             "provincia": "Provincia",
-            "cuenca": "Cuenca hídrica específica"
+            "cuenca": "Cuenca hídrica"
         }},
         "tipo_antecedente": {{
             "Delimitación para la planificación estratégica": false,
@@ -127,61 +139,51 @@ def analizar_documento_con_gemini(texto_pdf):
             "Catastro de iniciativas y medidas": false
         }},
         "objetivo_general": "Evaluación/Análisis de...",
-        "objetivos_especificos": [
-            "Cuantificar los efectos proyectados...",
-            "Evaluar los escenarios...",
-            "Proponer opciones de manejo..."
-        ],
-        "metodologias": ["Punto metodológico 1", "Punto metodológico 2"],
-        "resultados": ["Resultado principal 1", "Resultado principal 2"]
+        "objetivos_especificos": ["Cuantificar...", "Evaluar...", "Proponer..."],
+        "metodologias": ["Punto 1", "Punto 2"],
+        "resultados": ["Resultado 1", "Resultado 2"]
     }}
     """
 
     for key in api_keys:
         client = genai.Client(api_key=key)
         for modelo in modelos_disponibles:
-            intentos = 0
-            while intentos < 3:
-                try:
-                    response = client.models.generate_content(
-                        model=modelo,
-                        contents=prompt,
-                        config=types.GenerateContentConfig(
-                            response_mime_type="application/json",
-                            temperature=0.1,
-                        )
+            try:
+                response = client.models.generate_content(
+                    model=modelo,
+                    contents=prompt,
+                    config=types.GenerateContentConfig(
+                        response_mime_type="application/json",
+                        temperature=0.0,  # Respuesta directa sin vacilaciones
+                        max_output_tokens=1500,  # Limite para acelerar la generación
                     )
-                    if response and response.text:
-                        return json.loads(response.text)
-                except Exception as e:
-                    err_msg = str(e)
-                    if "503" in err_msg or "UNAVAILABLE" in err_msg:
-                        intentos += 1
-                        time.sleep(2 * intentos)
-                        continue
-                    break
+                )
+                if response and response.text:
+                    return json.loads(response.text)
+            except Exception:
+                continue
     return None
 
 # ---------------------------------------------------------
 # INTERFAZ DE USUARIO STREAMLIT
 # ---------------------------------------------------------
 st.markdown('<div class="main-header">PLATAFORMA DE REVISIÓN BIBLIOGRÁFICA Y FICHAS DE RESUMEN</div>', unsafe_allow_html=True)
-st.markdown('<div class="sub-header">Procesamiento automático de documentos y generación de fichas en Word</div>', unsafe_allow_html=True)
+st.markdown('<div class="sub-header">Procesamiento ultra-rápido de documentos y generación de fichas en Word</div>', unsafe_allow_html=True)
 
 uploaded_file = st.file_uploader("Cargar documento PDF bibliográfico:", type=["pdf"])
 
 if uploaded_file:
     file_bytes = uploaded_file.read()
-    if st.button("🔍 Procesar y Extraer Información", type="primary"):
-        with st.spinner("Leyendo documento y ejecutando análisis con Gemini IA..."):
-            texto = extraer_texto_pdf(file_bytes)
-            datos_extraidos = analizar_documento_con_gemini(texto)
+    if st.button("⚡ Procesar al Instante", type="primary"):
+        with st.spinner("Procesando documento en segundos..."):
+            texto = extraer_texto_optimizado(file_bytes)
+            datos_extraidos = analizar_documento_rapido(texto)
 
             if datos_extraidos:
                 st.session_state["datos_ficha"] = datos_extraidos
-                st.success("¡Análisis completado exitosamente!")
+                st.success("¡Ficha generada exitosamente!")
             else:
-                st.error("No se pudo extraer la información del documento.")
+                st.error("Ocurrió un error. Revisa la configuración de API.")
 
 if "datos_ficha" in st.session_state:
     st.markdown("---")
@@ -245,7 +247,7 @@ if "datos_ficha" in st.session_state:
         buffer.seek(0)
         return buffer
 
-    # Definir nombre dinámico del archivo basado en el título extraído
+    # Definir nombre dinámico del archivo
     nombre_salida = limpiar_nombre_archivo(datos.get("titulo", ""))
 
     # Botón de Descarga
