@@ -9,14 +9,14 @@ from docxtpl import DocxTemplate
 from google import genai
 from google.genai import types
 
-# Configuración de página
+# Configuración inicial de la página en Streamlit
 st.set_page_config(
     page_title="Generador de Fichas Bibliográficas",
     page_icon="📄",
     layout="wide"
 )
 
-# Estilos corporativos
+# Estilos visuales
 st.markdown("""
     <style>
     .main-header { font-size:24px; font-weight:bold; color:#002855; margin-bottom:2px; }
@@ -26,7 +26,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ---------------------------------------------------------
-# OBTENCIÓN DE API KEYS Y MODELOS DESDE SECRETS
+# OBTENCIÓN DE CONFIGURACIÓN DE GEMINI DESDE SECRETS
 # ---------------------------------------------------------
 def obtener_configuracion_gemini():
     keys = []
@@ -49,7 +49,7 @@ def obtener_configuracion_gemini():
 api_keys, modelos_disponibles = obtener_configuracion_gemini()
 
 # ---------------------------------------------------------
-# EXTRACCIÓN DE TEXTO PDF
+# EXTRACCIÓN DE TEXTO DESDE EL PDF
 # ---------------------------------------------------------
 def extraer_texto_pdf(file_bytes):
     try:
@@ -62,28 +62,32 @@ def extraer_texto_pdf(file_bytes):
         return f"[Error al leer PDF: {str(e)}]"
 
 # ---------------------------------------------------------
-# PROCESAMIENTO DE CONTEXTO CON GEMINI
+# PROCESAMIENTO Y EXTRACCIÓN CON GEMINI IA
 # ---------------------------------------------------------
 def analizar_documento_con_gemini(texto_pdf):
     if not api_keys:
-        st.error("No se encontraron API Keys en los Secrets.")
+        st.error("No se encontraron API Keys configuradas en Secrets.")
         return None
 
     prompt = f"""
-    Eres un experto analista en revisión bibliográfica e ingeniería hídrica.
+    Eres un experto analista en revisión bibliográfica e ingeniería hídrica/ambiental.
     Analiza el siguiente texto de un documento técnico/científico y extrae la información requerida para una ficha de resumen estandarizada.
 
     TEXTO DEL DOCUMENTO:
     {texto_pdf[:35000]}
 
-    INSTRUCCIONES:
+    INSTRUCCIONES DE REDACCIÓN Y ESTRUCTURA:
+    1. OBJETIVO GENERAL: Redacta un texto breve y continuo que describa el propósito central del estudio.
+    2. OBJETIVOS ESPECÍFICOS: Extrae y redacta OBLIGATORIAMENTE ENTRE 3 Y 6 OBJETIVOS ESPECÍFICOS. Deben ser sintéticos, concisos, iniciar con un verbo en infinitivo y abordar aspectos clave puntuales del estudio.
+    3. METODOLOGÍAS Y RESULTADOS: Redacta puntos sintéticos claros.
+
     Responde ÚNICAMENTE con un objeto JSON válido (sin marcas markdown de código ```json) con la siguiente estructura exacta:
 
     {{
-        "tipo_informacion": "Tipo de documento (ej: Artículo científico, Informe técnico)",
+        "tipo_informacion": "Tipo de documento (ej: Artículo científico, Informe técnico, Ley)",
         "titulo": "Título exacto del documento",
         "anio": "Año de publicación",
-        "elaborado_por": "Institución o departamento que elaboró el estudio",
+        "elaborado_por": "Institución o laboratorio que elaboró el estudio",
         "autores": "Autores del documento separados por punto y coma",
         "link_descarga": "URL o DOI si aplica",
         "alcance_geografico": {{
@@ -107,8 +111,12 @@ def analizar_documento_con_gemini(texto_pdf):
             "Balance Hídrico": false,
             "Catastro de iniciativas y medidas": false
         }},
-        "objetivo_general": "Objetivo general",
-        "objetivos_especificos": ["Objetivo específico 1", "Objetivo específico 2"],
+        "objetivo_general": "Evaluación/Análisis de...",
+        "objetivos_especificos": [
+            "Cuantificar los efectos proyectados...",
+            "Evaluar los escenarios...",
+            "Proponer opciones de manejo..."
+        ],
         "metodologias": ["Punto metodológico 1", "Punto metodológico 2"],
         "resultados": ["Resultado principal 1", "Resultado principal 2"]
     }}
@@ -140,7 +148,7 @@ def analizar_documento_con_gemini(texto_pdf):
     return None
 
 # ---------------------------------------------------------
-# INTERFAZ PRINCIPAL
+# INTERFAZ DE USUARIO STREAMLIT
 # ---------------------------------------------------------
 st.markdown('<div class="main-header">PLATAFORMA DE REVISIÓN BIBLIOGRÁFICA Y FICHAS DE RESUMEN</div>', unsafe_allow_html=True)
 st.markdown('<div class="sub-header">Procesamiento automático de documentos y generación de fichas en Word</div>', unsafe_allow_html=True)
@@ -153,7 +161,7 @@ if uploaded_file:
         with st.spinner("Leyendo documento y ejecutando análisis con Gemini IA..."):
             texto = extraer_texto_pdf(file_bytes)
             datos_extraidos = analizar_documento_con_gemini(texto)
-            
+
             if datos_extraidos:
                 st.session_state["datos_ficha"] = datos_extraidos
                 st.success("¡Análisis completado exitosamente!")
@@ -162,7 +170,7 @@ if uploaded_file:
 
 if "datos_ficha" in st.session_state:
     st.markdown("---")
-    st.subheader("📋 Vista Previa / Edición de Datos Extraídos")
+    st.subheader("📋 Vista Previa y Descarga de la Ficha")
 
     datos = st.session_state["datos_ficha"]
 
@@ -172,7 +180,6 @@ if "datos_ficha" in st.session_state:
         template_path = os.path.join(base_dir, "Plantilla_Ficha_Bibliografica.docx")
 
         if not os.path.exists(template_path):
-            # Intenta buscar el archivo subido alternativo
             template_path = os.path.join(base_dir, "Anexo Ficha revisión bibliográfica.docx")
 
         doc = DocxTemplate(template_path)
@@ -195,12 +202,12 @@ if "datos_ficha" in st.session_state:
             'MARCA_REGIONAL': "X" if alcance.get("Regional") else "",
             'MARCA_CUENCA': "X" if alcance.get("Cuenca(s)") else "",
 
-            # Ámbito
+            # Ámbito Geográfico
             'REGION': ambito.get("region", ""),
             'PROVINCIA': ambito.get("provincia", ""),
             'CUENCA': ambito.get("cuenca", ""),
 
-            # Marcas de Antecedentes
+            # Marcas de Tipo de Antecedente
             'M_DELIMITACION': "X" if antecedentes.get("Delimitación para la planificación estratégica") else "",
             'M_GENERO': "X" if antecedentes.get("Enfoque de Género") else "",
             'M_SOCIOECONOMICA': "X" if antecedentes.get("Caracterización socio-económica y cultural") else "",
